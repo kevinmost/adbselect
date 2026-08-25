@@ -23,6 +23,12 @@ use ratatui::{
     widgets::*,
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DeviceMode {
+    Adb,
+    Fastboot,
+}
+
 #[derive(Clone)]
 struct DeviceInfo {
     serial: String,
@@ -32,12 +38,15 @@ struct DeviceInfo {
     sdk: String,
     users: Option<String>,
     loading: bool,
+    mode: DeviceMode,
 }
 
 enum AppEvent {
     Key(KeyEvent),
     NewDevices(Vec<String>),
+    NewFastbootDevices(Vec<String>),
     ResolvedInfo(String, DeviceInfo),
+    ResolvedFastbootInfo(String, DeviceInfo),
 }
 
 fn get_device_users(serial: &str) -> Option<String> {
@@ -111,6 +120,35 @@ fn get_device_info(serial: &str) -> DeviceInfo {
         sdk,
         users,
         loading: false,
+        mode: DeviceMode::Adb,
+    }
+}
+
+fn get_fastboot_device_info(serial: &str) -> DeviceInfo {
+    let product_output = Command::new("fastboot")
+        .args(&["-s", serial, "getvar", "product"])
+        .output();
+        
+    let product = if let Ok(output) = product_output {
+        let text = String::from_utf8_lossy(&output.stderr).to_string()
+            + &String::from_utf8_lossy(&output.stdout);
+        text.lines()
+            .find(|line| line.starts_with("product:"))
+            .map(|line| line.strip_prefix("product:").unwrap().trim().to_string())
+            .unwrap_or_else(|| "Unknown Product".to_string())
+    } else {
+        "Unknown Product".to_string()
+    };
+
+    DeviceInfo {
+        serial: serial.to_string(),
+        name: product,
+        fingerprint: String::new(),
+        release: String::new(),
+        sdk: String::new(),
+        users: None,
+        loading: false,
+        mode: DeviceMode::Fastboot,
     }
 }
 
@@ -199,21 +237,86 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Thread for tracking fastboot devices
+    let fastboot_tx = tx.clone();
+    thread::spawn(move || {
+        loop {
+            let output = Command::new("fastboot")
+                .arg("devices")
+                .output();
+                
+            match output {
+                Ok(out) => {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let mut serials = Vec::new();
+                    for line in stdout.lines() {
+                        let line = line.trim();
+                        if line.is_empty() {
+                            continue;
+                        }
+                        if let Some((serial, mode)) = line.split_once('\t') {
+                            let mode_trimmed = mode.trim();
+                            if mode_trimmed == "fastboot" || mode_trimmed == "fastbootd" {
+                                serials.push(serial.trim().to_string());
+                            }
+                        }
+                    }
+                    if fastboot_tx.send(AppEvent::NewFastbootDevices(serials)).is_err() {
+                        break; // Main thread hung up
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    break; // fastboot is not installed, exit thread
+                }
+                Err(_) => {
+                    // Ignore other errors and retry
+                }
+            }
+            thread::sleep(Duration::from_millis(1000));
+        }
+    });
+
     enable_raw_mode()?;
     let mut stderr = io::stderr();
     execute!(stderr, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stderr);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut state = ListState::default();
-    state.select(Some(0));
+    let mut adb_state = ListState::default();
+    let mut fastboot_state = ListState::default();
 
     let mut app_state = AppState::SelectingDevice;
 
-    let mut devices: Vec<DeviceInfo> = Vec::new();
-    let mut active_serials: Vec<String> = Vec::new();
+    let mut adb_devices: Vec<DeviceInfo> = Vec::new();
+    let mut active_adb_serials: Vec<String> = Vec::new();
+
+    let mut fastboot_devices: Vec<DeviceInfo> = Vec::new();
+    let mut active_fastboot_serials: Vec<String> = Vec::new();
+
+    let mut selected_index: usize = 0;
 
     let selected_serial = loop {
+        let adb_len = adb_devices.len();
+        let fastboot_len = fastboot_devices.len();
+        let total_len = adb_len + fastboot_len;
+
+        if total_len == 0 {
+            selected_index = 0;
+            adb_state.select(None);
+            fastboot_state.select(None);
+        } else {
+            if selected_index >= total_len {
+                selected_index = total_len - 1;
+            }
+            if selected_index < adb_len {
+                adb_state.select(Some(selected_index));
+                fastboot_state.select(None);
+            } else {
+                adb_state.select(None);
+                fastboot_state.select(Some(selected_index - adb_len));
+            }
+        }
+
         terminal.draw(|f| {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -229,7 +332,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .style(Style::default().fg(Color::White).bg(Color::Blue));
             f.render_widget(header, chunks[0]);
 
-            let items: Vec<ListItem> = devices.iter().map(|dev| {
+            let content_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Percentage(50),
+                    Constraint::Percentage(50),
+                ])
+                .split(chunks[1]);
+
+            let adb_items: Vec<ListItem> = adb_devices.iter().map(|dev| {
                 let mut lines = vec![
                     Line::from(vec![
                         Span::styled(dev.name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
@@ -265,12 +376,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ListItem::new(lines)
             }).collect();
 
-            let list = List::new(items)
-                .block(Block::default().borders(Borders::ALL).title("Devices"))
+            let adb_list = List::new(adb_items)
+                .block(Block::default().borders(Borders::ALL).title("ADB Devices"))
                 .highlight_style(Style::default().bg(Color::Rgb(50, 50, 50)))
                 .highlight_symbol("* ");
 
-            f.render_stateful_widget(list, chunks[1], &mut state);
+            f.render_stateful_widget(adb_list, content_chunks[0], &mut adb_state);
+
+            let fastboot_items: Vec<ListItem> = fastboot_devices.iter().map(|dev| {
+                let mut lines = vec![
+                    Line::from(vec![
+                        Span::styled(dev.name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                        Span::raw(" ("),
+                        Span::styled(dev.serial.clone(), Style::default().fg(Color::Green)),
+                        Span::raw(")"),
+                    ]),
+                ];
+
+                if dev.loading {
+                    lines.push(Line::from(vec![
+                        Span::styled("    Loading properties...", Style::default().fg(Color::LightBlue).add_modifier(Modifier::ITALIC)),
+                    ]));
+                    lines.push(Line::from(vec![Span::raw("")]));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::styled("    Mode: Fastboot", Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD)),
+                    ]));
+                    lines.push(Line::from(vec![Span::raw("")]));
+                }
+
+                lines.push(Line::from(vec![
+                    Span::styled("    ".to_string() + &"-".repeat(40), Style::default().fg(Color::DarkGray)),
+                ]));
+                
+                ListItem::new(lines)
+            }).collect();
+
+            let fastboot_list = List::new(fastboot_items)
+                .block(Block::default().borders(Borders::ALL).title("Fastboot Devices"))
+                .highlight_style(Style::default().bg(Color::Rgb(50, 50, 50)))
+                .highlight_symbol("* ");
+
+            f.render_stateful_widget(fastboot_list, content_chunks[1], &mut fastboot_state);
 
             if let AppState::ConfirmAbort { ref current_serial, selected_option } = app_state {
                 let area = centered_rect(75, 50, f.size());
@@ -306,7 +453,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // 2. Device description
                 let mut desc_lines = Vec::new();
                 if let Some(ref serial) = current_serial {
-                    if let Some(dev) = devices.iter().find(|d| &d.serial == serial) {
+                    let dev = adb_devices.iter().find(|d| &d.serial == serial)
+                        .or_else(|| fastboot_devices.iter().find(|d| &d.serial == serial));
+                    if let Some(dev) = dev {
                         if dev.loading {
                             desc_lines.push(Line::from(vec![
                                 Span::styled(dev.name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
@@ -316,6 +465,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ]));
                             desc_lines.push(Line::from(vec![
                                 Span::styled("  Loading properties...", Style::default().fg(Color::LightBlue).add_modifier(Modifier::ITALIC)),
+                            ]));
+                        } else if dev.mode == DeviceMode::Fastboot {
+                            desc_lines.push(Line::from(vec![
+                                Span::styled(dev.name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                                Span::raw(" ("),
+                                Span::styled(dev.serial.clone(), Style::default().fg(Color::Green)),
+                                Span::raw(")"),
+                            ]));
+                            desc_lines.push(Line::from(vec![
+                                Span::styled("  Mode: Fastboot", Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD)),
                             ]));
                         } else {
                             desc_lines.push(Line::from(vec![
@@ -394,23 +553,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         AppState::SelectingDevice => {
                             match code {
                                 KeyCode::Up | KeyCode::Char('k') => {
-                                    let i = match state.selected() {
-                                        Some(i) => if i == 0 { devices.len().saturating_sub(1) } else { i - 1 },
-                                        None => 0,
-                                    };
-                                    state.select(Some(i));
+                                    let total_len = adb_devices.len() + fastboot_devices.len();
+                                    if total_len > 0 {
+                                        selected_index = if selected_index == 0 {
+                                            total_len - 1
+                                        } else {
+                                            selected_index - 1
+                                        };
+                                    }
                                 }
                                 KeyCode::Down | KeyCode::Char('j') => {
-                                    let i = match state.selected() {
-                                        Some(i) => if i >= devices.len().saturating_sub(1) { 0 } else { i + 1 },
-                                        None => 0,
-                                    };
-                                    state.select(Some(i));
+                                    let total_len = adb_devices.len() + fastboot_devices.len();
+                                    if total_len > 0 {
+                                        selected_index = if selected_index >= total_len - 1 {
+                                            0
+                                        } else {
+                                            selected_index + 1
+                                        };
+                                    }
                                 }
                                 KeyCode::Enter => {
-                                    if let Some(i) = state.selected() {
-                                        if i < devices.len() {
-                                            break Some(devices[i].serial.clone());
+                                    let adb_len = adb_devices.len();
+                                    let total_len = adb_len + fastboot_devices.len();
+                                    if total_len > 0 && selected_index < total_len {
+                                        if selected_index < adb_len {
+                                            break Some(adb_devices[selected_index].serial.clone());
+                                        } else {
+                                            break Some(fastboot_devices[selected_index - adb_len].serial.clone());
                                         }
                                     }
                                 }
@@ -464,14 +633,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 AppEvent::NewDevices(new_serials) => {
                     // Find removed devices
-                    devices.retain(|d| new_serials.contains(&d.serial));
-                    active_serials.retain(|s| new_serials.contains(s));
+                    adb_devices.retain(|d| new_serials.contains(&d.serial));
+                    active_adb_serials.retain(|s| new_serials.contains(s));
 
                     // Find new devices
                     for serial in new_serials {
-                        if !active_serials.contains(&serial) {
-                            active_serials.push(serial.clone());
-                            devices.push(DeviceInfo {
+                        if !active_adb_serials.contains(&serial) {
+                            active_adb_serials.push(serial.clone());
+                            adb_devices.push(DeviceInfo {
                                 serial: serial.clone(),
                                 name: serial.clone(),
                                 fingerprint: String::new(),
@@ -479,6 +648,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 sdk: String::new(),
                                 users: None,
                                 loading: true,
+                                mode: DeviceMode::Adb,
                             });
 
                             // Spawn thread to fetch info
@@ -492,16 +662,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                     // Adjust selection if out of bounds
-                    if let Some(i) = state.selected() {
-                        if i >= devices.len() {
-                            state.select(devices.len().checked_sub(1));
+                    let total_len = adb_devices.len() + fastboot_devices.len();
+                    if selected_index >= total_len && total_len > 0 {
+                        selected_index = total_len - 1;
+                    }
+                }
+                AppEvent::NewFastbootDevices(new_serials) => {
+                    // Find removed devices
+                    fastboot_devices.retain(|d| new_serials.contains(&d.serial));
+                    active_fastboot_serials.retain(|s| new_serials.contains(s));
+
+                    // Find new devices
+                    for serial in new_serials {
+                        if !active_fastboot_serials.contains(&serial) {
+                            active_fastboot_serials.push(serial.clone());
+                            fastboot_devices.push(DeviceInfo {
+                                serial: serial.clone(),
+                                name: serial.clone(),
+                                fingerprint: String::new(),
+                                release: String::new(),
+                                sdk: String::new(),
+                                users: None,
+                                loading: true,
+                                mode: DeviceMode::Fastboot,
+                            });
+
+                            // Spawn thread to fetch info
+                            let info_tx = tx.clone();
+                            let serial_clone = serial.clone();
+                            thread::spawn(move || {
+                                let info = get_fastboot_device_info(&serial_clone);
+                                info_tx.send(AppEvent::ResolvedFastbootInfo(serial_clone, info)).unwrap();
+                            });
                         }
-                    } else if !devices.is_empty() {
-                        state.select(Some(0));
+                    }
+
+                    // Adjust selection if out of bounds
+                    let total_len = adb_devices.len() + fastboot_devices.len();
+                    if selected_index >= total_len && total_len > 0 {
+                        selected_index = total_len - 1;
                     }
                 }
                 AppEvent::ResolvedInfo(serial, info) => {
-                    if let Some(dev) = devices.iter_mut().find(|d| d.serial == serial) {
+                    if let Some(dev) = adb_devices.iter_mut().find(|d| d.serial == serial) {
+                        *dev = info;
+                        dev.loading = false;
+                    }
+                }
+                AppEvent::ResolvedFastbootInfo(serial, info) => {
+                    if let Some(dev) = fastboot_devices.iter_mut().find(|d| d.serial == serial) {
                         *dev = info;
                         dev.loading = false;
                     }
