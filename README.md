@@ -20,11 +20,27 @@ It features a rich, multi-line Terminal User Interface (TUI) built with `ratatui
 
 ## Installation & Setup
 
-Ensure you have Rust nightly installed (`rustup toolchain install nightly` if needed) to support cargo scripts and building.
+Ensure you have Rust installed. You can install `adbs` using Cargo, or build/install manually using the provided Makefile.
 
-### 1. Build & Install using Makefile
+### 1. Install via Cargo
 
-A `Makefile` is provided to compile the `adbs.rs` script into a release binary (`adbs-bin`) and install it to your system.
+To install `adbs-bin` directly from the source repository:
+
+```bash
+cargo install --path .
+```
+
+Or from git:
+
+```bash
+cargo install --git https://github.com/kmost/adbselect
+```
+
+Make sure your `~/.cargo/bin` directory is in your `PATH`.
+
+### 2. Build & Install using Makefile
+
+A `Makefile` is provided to compile the project into a release binary (`adbs-bin`) and install it to your system.
 
 To build the release binary, run:
 ```bash
@@ -108,12 +124,6 @@ def --wrapped adb [...args] {
 Simply run the shell command:
 ```bash
 adbs
-```
-
-Or execute the script directly if you preferred not to compile:
-```bash
-chmod +x adbs.rs
-./adbs.rs
 ```
 
 ### Keyboard Controls

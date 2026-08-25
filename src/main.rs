@@ -1,13 +1,3 @@
-#!/usr/bin/env -S cargo +nightly -Zscript -q
----
-[package]
-edition = "2021"
-
-[dependencies]
-crossterm = "0.27"
-ratatui = "0.26"
----
-
 use std::io::{self, Read};
 use std::process::Command;
 use std::sync::mpsc;
