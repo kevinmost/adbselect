@@ -50,7 +50,7 @@ Add the appropriate snippet below to your shell startup profile:
 #### For Zsh (`~/.zshrc`) or Bash (`~/.bash_profile` / `~/.bashrc`)
 ```bash
 adbs() {
-    # If installed to PATH via Makefile, you can just run the binary:
+    # adbs-bin must be on your PATH
     local selection=$(adbs-bin "$@")
     
     # Handle environment variable updates
@@ -67,7 +67,7 @@ adbs() {
 #### For Nushell (`config.nu`)
 ```nushell
 def --env adbs [] {
-    # If installed to PATH via Makefile, you can just run the binary:
+    # adbs-bin must be on your PATH
     let selection = (adbs-bin | str trim)
 
     # Handle environment variable updates
