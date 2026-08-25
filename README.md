@@ -2,7 +2,7 @@
 
 ![adbs Screenshot](SCREENSHOT.png)
 
-`adbs` is a lightweight, real-time, interactive Android Debug Bridge (ADB) and Fastboot device selector written in Rust. It is built as a standalone, executable script using the Cargo script feature (`cargo +nightly -Zscript`), and can be compiled into a native, high-performance binary.
+`adbs` is a lightweight, real-time, interactive Android Debug Bridge (ADB) and Fastboot device selector written in Rust.
 
 It features a rich, multi-line Terminal User Interface (TUI) built with `ratatui` and `crossterm` to display detailed device info in real-time, and integrates with your shell to set `ADB_SERIAL` globally.
 
@@ -18,19 +18,15 @@ It features a rich, multi-line Terminal User Interface (TUI) built with `ratatui
 
 ---
 
-## Installation & Setup
+## Installation
 
-Ensure you have Rust installed. You can install `adbs` using Cargo, or build/install manually using the provided Makefile.
+NOTE: No matter how you install this, you must then proceed to [Shell Integration](#shell-integration).
 
-### 1. Install via Cargo
+### Via `cargo` (recommended)
 
-To install `adbs-bin` directly from the source repository:
+The easiest way to install this tool is via the `cargo` (Rust) build toolchain. You can easily install this via a one-liner; see [rustup](https://doc.rust-lang.org/cargo/getting-started/installation.html).
 
-```bash
-cargo install --path .
-```
-
-Or from git:
+Once `cargo` is installed and on your path, simply run:
 
 ```bash
 cargo install --git https://github.com/kmost/adbselect
@@ -38,36 +34,15 @@ cargo install --git https://github.com/kmost/adbselect
 
 Make sure your `~/.cargo/bin` directory is in your `PATH`.
 
-### 2. Build & Install using Makefile
+You should now be able to run `adbs-bin` and use the TUI.
 
-A `Makefile` is provided to compile the project into a release binary (`adbs-bin`) and install it to your system.
+### Alternative: Manually downloading Github release
 
-To build the release binary, run:
-```bash
-make
-```
+You may also download `adbs-bin` from the [latest Github release](https://github.com/kevinmost/adbselect/releases) and place it anywhere on your path.
 
-Then, install system-wide (defaults to `/usr/local/bin`):
-```bash
-sudo make install
-```
+Make sure to mark it as executable (ex, `chmod +x /usr/local/bin/adbs-bin`).
 
-> [!NOTE]
-> Building first as a regular user ensures `cargo` runs within your user's configured environment, preventing `PATH` resolution issues when running under `sudo`.
-
-To install to a user-specific directory (e.g., `~/.local/bin`):
-```bash
-make install PREFIX=~/.local
-```
-
-To uninstall:
-```bash
-sudo make uninstall
-# Or for user-specific directory:
-make uninstall PREFIX=~/.local
-```
-
-### 2. Shell Integration
+## Shell Integration
 Because a child process cannot modify your parent shell's environment variables, the `adbs` interactive TUI is rendered on `stderr`, allowing the parent shell wrapper to capture the selected device's serial directly from `stdout` without using any temporary files.
 
 Add the appropriate snippet below to your shell startup profile:
