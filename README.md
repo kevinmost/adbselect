@@ -1,16 +1,17 @@
-# adbs - Interactive ADB Device Selector & Shell Integration
+# adbs - Interactive ADB & Fastboot Device Selector & Shell Integration
 
 ![adbs Screenshot](SCREENSHOT.png)
 
-`adbs` is a lightweight, real-time, interactive Android Debug Bridge (ADB) device selector written in Rust. It is built as a standalone, executable script using the Cargo script feature (`cargo +nightly -Zscript`), and can be compiled into a native, high-performance binary.
+`adbs` is a lightweight, real-time, interactive Android Debug Bridge (ADB) and Fastboot device selector written in Rust. It is built as a standalone, executable script using the Cargo script feature (`cargo +nightly -Zscript`), and can be compiled into a native, high-performance binary.
 
 It features a rich, multi-line Terminal User Interface (TUI) built with `ratatui` and `crossterm` to display detailed device info in real-time, and integrates with your shell to set `ADB_SERIAL` globally.
 
 ## Features
 
-- **Real-time Auto-Updating:** Listens to `adb track-devices` and dynamically updates when devices are connected or disconnected (including wireless ADB).
-- **Asynchronous Loading:** Fetches device info (name, fingerprint, Android version, SDK level, user profiles) in background threads, keeping the UI completely fluid and responsive.
-- **Multi-User Profiles Support:** Identifies and lists multiple user accounts (e.g. Work profile, Secure Folder) installed on each device dynamically inside the TUI.
+- **ADB & Fastboot Support:** Real-time tracking and selection of devices in both ADB mode and Fastboot/Fastbootd modes, with the TUI split vertically into two sections.
+- **Real-time Auto-Updating:** Listens to `adb track-devices` and periodically polls `fastboot devices` to dynamically update the UI when devices are connected or disconnected.
+- **Asynchronous Loading:** Fetches device info (name, fingerprint, Android version, SDK level, user profiles, or Fastboot product details) in background threads, keeping the UI completely fluid and responsive.
+- **Multi-User Profiles Support:** Identifies and lists multiple user accounts (e.g. Work profile, Secure Folder) installed on each ADB device dynamically inside the TUI.
 - **Rich, Colored TUI:** Beautifully styled layout showing detailed properties at a glance.
 - **Vim Keybindings:** Navigate lists and dialog buttons seamlessly using standard arrow keys or classic Vim keys (`h` / `j` / `k` / `l`).
 - **Zero Telemetry:** Silenced Cargo build logs (`-q` flag) for a seamless, native-feeling CLI experience.
